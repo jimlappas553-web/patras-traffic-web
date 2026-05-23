@@ -184,18 +184,33 @@ if os.path.exists("traffic_patra.xlsx"):
     except Exception as e:
         st.error(f"Σφάλμα ανάγνωσης Excel: {e}")
 
-def get_hybrid_color(speed, road_name):
+# 🔥 Η ΤΡΟΠΟΠΟΙΗΜΕΝΗ ΣΥΝΑΡΤΗΣΗ ΓΙΑ ΤΟ NIGHT MODE ΣΤΑ ΧΡΩΜΑΤΑ
+def get_hybrid_color(speed, road_name, time_str):
     if pd.isna(speed) or speed == 0: return "#7f8c8d" 
+    
+    # Έλεγχος αν είναι νύχτα (21:00 έως 06:00)
+    hour = int(time_str.split(':')[0]) if time_str else 12
+    is_night = (hour >= 21 or hour <= 6)
+
     r_type = road_types.get(road_name, "").lower()
+    
     if "trunk" in r_type or "motorway" in r_type:
         limit = static_data.get(road_name, 90)
         ratio = speed / limit if limit > 0 else 1
-        if ratio < 0.4: return "#FF4B4B" # Εντονο κόκκινο
-        if ratio < 0.75: return "#FFC107" # Ζεστό κίτρινο
+        
+        # Πιο ελαστικά τα όρια το βράδυ για να μην κοκκινίζει εύκολα
+        thresh_red = 0.20 if is_night else 0.4 
+        thresh_yel = 0.50 if is_night else 0.75
+        
+        if ratio < thresh_red: return "#FF4B4B" # Εντονο κόκκινο
+        if ratio < thresh_yel: return "#FFC107" # Ζεστό κίτρινο
         return "#00E676" # Φωτεινό πράσινο
     else:
-        if speed < 15: return "#FF4B4B"
-        if speed < 30: return "#FFC107"
+        thresh_red = 7 if is_night else 15
+        thresh_yel = 15 if is_night else 30
+        
+        if speed < thresh_red: return "#FF4B4B"
+        if speed < thresh_yel: return "#FFC107"
         return "#00E676"
 
 # --- 3. Φόρτωση Γεωμετρίας & CSV ---
@@ -332,7 +347,6 @@ with tab1:
     # Λεπτή γραμμή που ταιριάζει με το glass UI
     st.markdown("<hr style='border:1px solid rgba(255,255,255,0.1)'>", unsafe_allow_html=True)
     
-    # Χάρτης - Δημιουργία shadow container για να μην "χτυπάει" άσχημα το λευκό του Google Maps
     m = folium.Map(
         location=[38.2462, 21.7351], 
         zoom_start=14, 
@@ -350,10 +364,10 @@ with tab1:
 
         is_type_match = (selected_type == "Όλοι οι Τύποι" or road_types.get(road_name) == selected_type)
         if selected_road != "Όλες οι Οδοί":
-            if road_name == selected_road: color, weight, opacity = get_hybrid_color(speed, road_name), 8, 1.0
+            if road_name == selected_road: color, weight, opacity = get_hybrid_color(speed, road_name, selected_time), 8, 1.0
             else: color, weight, opacity = "#333333", 2, 0.15 
         else:
-            if is_type_match: color, weight, opacity = get_hybrid_color(speed, road_name), 5, 0.9
+            if is_type_match: color, weight, opacity = get_hybrid_color(speed, road_name, selected_time), 5, 0.9
             else: color, weight, opacity = "#333333", 2, 0.15
 
         line = folium.PolyLine(
@@ -384,12 +398,18 @@ with tab1:
             filtered_view_df['Type'] = filtered_view_df['Road_Segment'].map(road_types).fillna('Άγνωστο')
             filtered_view_df['Limit'] = filtered_view_df['Road_Segment'].apply(lambda x: static_data.get(x, 50))
             
+            # 🔥 NIGHT MODE ΕΝΣΩΜΑΤΩΣΗ ΣΤΑ ΣΤΑΤΙΣΤΙΚΑ (Ελέγχει αν υπάρχει συμφόρηση λαμβάνοντας υπόψη το βράδυ)
             def is_congested(row):
+                hour = int(selected_time.split(':')[0]) if selected_time else 12
+                is_night = (hour >= 21 or hour <= 6)
+                
                 r_type = str(row['Type']).lower()
                 if "trunk" in r_type or "motorway" in r_type:
-                    return (row['Speed_kmh'] / row['Limit']) < 0.4 if row['Limit'] > 0 else False
+                    thresh = 0.20 if is_night else 0.4
+                    return (row['Speed_kmh'] / row['Limit']) < thresh if row['Limit'] > 0 else False
                 else:
-                    return row['Speed_kmh'] < 15
+                    thresh = 7 if is_night else 15
+                    return row['Speed_kmh'] < thresh
                     
             filtered_view_df['Is_Congested'] = filtered_view_df.apply(is_congested, axis=1)
             
@@ -422,17 +442,28 @@ with tab1:
                 st.dataframe(worst_5, use_container_width=True)
             with c_right:
                 st.markdown("#### 🚦 Κατανομή Επιπέδου Κυκλοφορίας")
+                
+                # 🔥 NIGHT MODE ΣΤΗΝ ΠΙΤΑ ΤΩΝ ΣΤΑΤΙΣΤΙΚΩΝ
                 def categorize_hybrid(row):
                     speed = row['Speed_kmh']
+                    hour = int(selected_time.split(':')[0]) if selected_time else 12
+                    is_night = (hour >= 21 or hour <= 6)
+                    
                     r_type = str(row['Type']).lower()
                     if "trunk" in r_type or "motorway" in r_type:
                         ratio = speed / row['Limit'] if row['Limit'] > 0 else 1
-                        if ratio < 0.4: return 'Συμφόρηση (Congested)'
-                        if ratio < 0.75: return 'Μέτρια (Moderate)'
+                        thresh_red = 0.20 if is_night else 0.4
+                        thresh_yel = 0.50 if is_night else 0.75
+                        
+                        if ratio < thresh_red: return 'Συμφόρηση (Congested)'
+                        if ratio < thresh_yel: return 'Μέτρια (Moderate)'
                         return 'Ελεύθερη (Clear)'
                     else:
-                        if speed < 15: return 'Συμφόρηση (Congested)'
-                        if speed < 30: return 'Μέτρια (Moderate)'
+                        thresh_red = 7 if is_night else 15
+                        thresh_yel = 15 if is_night else 30
+                        
+                        if speed < thresh_red: return 'Συμφόρηση (Congested)'
+                        if speed < thresh_yel: return 'Μέτρια (Moderate)'
                         return 'Ελεύθερη (Clear)'
                         
                 filtered_view_df['Traffic_Level'] = filtered_view_df.apply(categorize_hybrid, axis=1)
@@ -473,7 +504,7 @@ with tab1:
             
             fig_type.update_layout(
                 paper_bgcolor='rgba(0,0,0,0)',
-                plot_bgcolor='rgba(0,0,0,0)', # Απόλυτη διαφάνεια για να φαίνεται το glass effect
+                plot_bgcolor='rgba(0,0,0,0)', 
                 font=dict(color="#E0E0E0"),
                 xaxis=dict(showgrid=False, tickangle=-45, nticks=24),
                 yaxis=dict(showgrid=True, gridcolor='rgba(255,255,255,0.05)'),
@@ -625,7 +656,8 @@ with tab2:
                 
                 for road_name, coords in geometry_data.items():
                     speed = live_speeds.get(road_name, static_data.get(road_name, 0))
-                    c = get_hybrid_color(speed, road_name)
+                    # Και εδώ το API καλεί την get_hybrid_color με την επιλεγμένη ώρα
+                    c = get_hybrid_color(speed, road_name, selected_time)
                     folium.PolyLine(locations=coords, color=c, weight=2, opacity=0.15).add_to(m_res)
 
                 folium.PolyLine(locations=route_coords, color="#00BFFF", weight=7, opacity=0.8).add_to(m_res)
@@ -674,6 +706,12 @@ with tab3:
         df_heat['Limit'] = df_heat['Road_Segment'].apply(get_limit)
         df_heat['Congestion'] = ((df_heat['Limit'] - df_heat['Speed_kmh']) / df_heat['Limit']) * 100
         df_heat['Congestion'] = df_heat['Congestion'].clip(lower=0) 
+        
+        # 🔥 ΝΕΟ: ΕΦΑΡΜΟΓΗ NIGHT-MODE ΣΤΟ HEATMAP ΓΙΑ ΝΑ ΜΗΝ "ΚΟΚΚΙΝΙΖΕΙ" ΤΑ ΒΡΑΔΙΑ ΛΑΘΟΣ
+        df_heat['Hour'] = df_heat['Timestamp'].dt.hour
+        is_night_mask = (df_heat['Hour'] >= 21) | (df_heat['Hour'] <= 6)
+        # Μειώνουμε πλασματικά τη συμφόρηση το βράδυ κατά 60% (ώστε το κόκκινο να γίνει πορτοκαλί/πράσινο)
+        df_heat.loc[is_night_mask, 'Congestion'] = df_heat.loc[is_night_mask, 'Congestion'] * 0.4
         
         df_heat['DayOfWeek'] = df_heat['Timestamp'].dt.dayofweek
         day_map = {0: 'Δευτέρα', 1: 'Τρίτη', 2: 'Τετάρτη', 3: 'Πέμπτη', 4: 'Παρασκευή', 5: 'Σάββατο', 6: 'Κυριακή'}
