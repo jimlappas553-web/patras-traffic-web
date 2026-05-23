@@ -149,4 +149,4 @@ API_KEYS = [
 # --- 4. SIDEBAR ---
 with st.sidebar:
     st.markdown("<h2 style='text-align: center; text-shadow: 1px 1px 2px black;'>⚙️ Κέντρο Ελέγχου</h2>", unsafe_allow_html=True)
-    st.markdown("<hr style='border: 1px solid rgba(255,255,255,0.1);'>", unsafe_allow_html
+    st.markdown("<hr style='border: 1px solid rgba(255,255,255,0.1);'>", unsafe_allow_html=True)
