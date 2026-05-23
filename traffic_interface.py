@@ -208,19 +208,43 @@ def get_parallel_line(coords, dist_meters=2.0):
     except:
         return coords
 
-def get_hybrid_color(speed, road_name):
+# 🔥 ΝΕΑ βοηθητική συνάρτηση για τον έλεγχο "Night Mode" (22:00 - 06:00)
+def is_night_time(time_str):
+    if not time_str: return False
+    try:
+        hour = int(time_str.split(':')[0])
+        return hour >= 22 or hour <= 6
+    except:
+        return False
+
+# 🔥 ΝΕΑ βελτιωμένη συνάρτηση χρωμάτων που δέχεται και την ώρα
+def get_hybrid_color(speed, road_name, current_time_str):
     if pd.isna(speed) or speed == 0: return "#7f8c8d" 
+    
     r_type = road_types.get(road_name, "").lower()
+    night_mode = is_night_time(current_time_str)
+    
+    # 1. Βασικός υπολογισμός κατηγορίας
     if "trunk" in r_type or "motorway" in r_type:
         limit = static_data.get(road_name, 90)
         ratio = speed / limit if limit > 0 else 1
-        if ratio < 0.4: return "#EF5350"
-        if ratio < 0.75: return "#FFCA28"
-        return "#66BB6A"
+        if ratio < 0.4: color_cat = "red"
+        elif ratio < 0.75: color_cat = "yellow"
+        else: color_cat = "green"
     else:
-        if speed < 15: return "#EF5350"
-        if speed < 30: return "#FFCA28"
-        return "#66BB6A"
+        if speed < 15: color_cat = "red"
+        elif speed < 30: color_cat = "yellow"
+        else: color_cat = "green"
+        
+    # 2. Προσαρμογή λόγω ώρας (Night Mode Shift)
+    if night_mode:
+        if color_cat == "red": color_cat = "yellow"     # Το κόκκινο γίνεται κίτρινο
+        elif color_cat == "yellow": color_cat = "green" # Το κίτρινο γίνεται πράσινο
+        
+    # 3. Επιστροφή του σωστού HEX
+    if color_cat == "red": return "#EF5350"
+    if color_cat == "yellow": return "#FFCA28"
+    return "#66BB6A"
 
 # --- TABS ---
 tab1, tab2, tab3 = st.tabs(["🗺️ Ανάλυση Δικτύου & Χάρτης", "🔬 Υπολογισμός Κλικάροντας", "📅 Εβδομαδιαίο Heatmap"])
@@ -246,10 +270,10 @@ with tab1:
 
         is_type_match = (selected_type == "Όλοι οι Τύποι" or road_types.get(road_name) == selected_type)
         if selected_road != "Όλες οι Οδοί":
-            if road_name == selected_road: color, weight, opacity = get_hybrid_color(speed, road_name), 8, 1.0
+            if road_name == selected_road: color, weight, opacity = get_hybrid_color(speed, road_name, selected_time), 8, 1.0
             else: color, weight, opacity = "#333333", 2, 0.15 
         else:
-            if is_type_match: color, weight, opacity = get_hybrid_color(speed, road_name), 5, 0.9
+            if is_type_match: color, weight, opacity = get_hybrid_color(speed, road_name, selected_time), 5, 0.9
             else: color, weight, opacity = "#333333", 2, 0.15
 
         line = folium.PolyLine(
@@ -280,12 +304,19 @@ with tab1:
             filtered_view_df['Type'] = filtered_view_df['Road_Segment'].map(road_types).fillna('Άγνωστο')
             filtered_view_df['Limit'] = filtered_view_df['Road_Segment'].apply(lambda x: static_data.get(x, 50))
             
+            # 🔥 Ενημερωμένη συνάρτηση is_congested
             def is_congested(row):
                 r_type = str(row['Type']).lower()
+                night_mode = is_night_time(selected_time)
+                
                 if "trunk" in r_type or "motorway" in r_type:
-                    return (row['Speed_kmh'] / row['Limit']) < 0.4 if row['Limit'] > 0 else False
+                    is_red = (row['Speed_kmh'] / row['Limit']) < 0.4 if row['Limit'] > 0 else False
                 else:
-                    return row['Speed_kmh'] < 15
+                    is_red = row['Speed_kmh'] < 15
+                    
+                if night_mode:
+                    return False
+                return is_red
                     
             filtered_view_df['Is_Congested'] = filtered_view_df.apply(is_congested, axis=1)
             
@@ -318,18 +349,29 @@ with tab1:
                 st.dataframe(worst_5, use_container_width=True)
             with c_right:
                 st.markdown("#### 🚦 Κατανομή Κυκλοφορίας")
+                
+                # 🔥 Ενημερωμένη συνάρτηση categorize_hybrid
                 def categorize_hybrid(row):
                     speed = row['Speed_kmh']
                     r_type = str(row['Type']).lower()
+                    night_mode = is_night_time(selected_time)
+                    
                     if "trunk" in r_type or "motorway" in r_type:
                         ratio = speed / row['Limit'] if row['Limit'] > 0 else 1
-                        if ratio < 0.4: return 'Συμφόρηση'
-                        if ratio < 0.75: return 'Μέτρια'
-                        return 'Ελεύθερη'
+                        if ratio < 0.4: cat = 'Συμφόρηση'
+                        elif ratio < 0.75: cat = 'Μέτρια'
+                        else: cat = 'Ελεύθερη'
                     else:
-                        if speed < 15: return 'Συμφόρηση'
-                        if speed < 30: return 'Μέτρια'
-                        return 'Ελεύθερη'
+                        if speed < 15: cat = 'Συμφόρηση'
+                        elif speed < 30: cat = 'Μέτρια'
+                        else: cat = 'Ελεύθερη'
+                        
+                    # Μετατόπιση κατηγοριών το βράδυ
+                    if night_mode:
+                        if cat == 'Συμφόρηση': return 'Μέτρια'
+                        if cat == 'Μέτρια': return 'Ελεύθερη'
+                        
+                    return cat
                         
                 filtered_view_df['Traffic_Level'] = filtered_view_df.apply(categorize_hybrid, axis=1)
                 pie_fig = px.pie(filtered_view_df, names='Traffic_Level', hole=0.5, color='Traffic_Level',
@@ -341,19 +383,15 @@ with tab1:
         st.markdown("### 📈 Συγκριτική Ανάλυση ανά Τύπο Οδού")
         st.caption("Πώς συμπεριφέρονται οι διαφορετικές κατηγορίες δρόμων μέσα στη μέρα.")
         
-       # 🔥 ΔΙΟΡΘΩΣΗ: Φτιάχνουμε τη στήλη 'Type' με βάση το λεξικό road_types ΠΡΙΝ φιλτράρουμε!
         df_history['Type'] = df_history['Road_Segment'].map(road_types).fillna('Άγνωστο')
 
-        # 1. ΚΑΘΑΡΙΣΜΟΣ: Πετάμε το 'Άγνωστο' που προσθέτει θόρυβο
         df_types = df_history[df_history['Type'] != 'Άγνωστο'].copy()
         
         if not df_types.empty:
-            # 2. ΤΑΞΙΝΟΜΗΣΗ: Φτιάχνουμε την ώρα και τη βάζουμε στη σειρά (για να μη πάει το 12:40 στο τέλος)
             df_types['Ώρα'] = df_types['Timestamp'].dt.strftime('%H:%M')
             type_grouped = df_types.groupby(['Ώρα', 'Type'])['Speed_kmh'].mean().reset_index()
             type_grouped = type_grouped.sort_values(by='Ώρα')
             
-            # 3. ΣΤΗΣΙΜΟ ΓΡΑΦΗΜΑΤΟΣ
             fig_type = px.line(
                 type_grouped, 
                 x="Ώρα", 
@@ -363,7 +401,6 @@ with tab1:
                 markers=True
             )
             
-            # 🔥 Η ΜΑΓΙΚΗ ΕΝΤΟΛΗ: Ενώνει τα κενά! (γεφυρώνει την τρύπα του μεσημεριού)
             fig_type.update_traces(connectgaps=True)
             
             fig_type.update_layout(
@@ -373,7 +410,7 @@ with tab1:
                 xaxis=dict(
                     showgrid=False, 
                     tickangle=-45, 
-                    nticks=24 # Αραιώνει τις ταμπέλες της ώρας για να μη γίνεται "μουτζούρα"
+                    nticks=24
                 ),
                 yaxis=dict(showgrid=True, gridcolor='rgba(255,255,255,0.1)'),
                 hovermode="x unified"
@@ -500,7 +537,8 @@ with tab2:
                 
                 for road_name, coords in geometry_data.items():
                     speed = live_speeds.get(road_name, static_data.get(road_name, 0))
-                    c = get_hybrid_color(speed, road_name)
+                    # 🔥 Προστέθηκε η ώρα και εδώ
+                    c = get_hybrid_color(speed, road_name, selected_time)
                     folium.PolyLine(locations=coords, color=c, weight=2, opacity=0.2).add_to(m_res)
 
                 folium.PolyLine(locations=route_coords, color="#00BFFF", weight=7, opacity=0.8).add_to(m_res)
@@ -589,7 +627,6 @@ with tab3:
             st.markdown("<br>", unsafe_allow_html=True)
 
             # --- DRAMATIC CONTRAST HEATMAP ---
-            # "Επιθετική" χρωματική κλίμακα για έντονες διαφορές
             dramatic_scale = [
                 [0.0,  "#2ecc71"], # 🟢 Πράσινο (Άδειο)
                 [0.3,  "#2ecc71"], # 🟢 Πράσινο 
@@ -606,7 +643,7 @@ with tab3:
                 x=pivot_df.columns,
                 y=pivot_df.index,
                 color_continuous_scale=dramatic_scale, 
-                range_color=[35, 65], # 🔥 Το ζουμ για να φαίνονται οι διαφορές!
+                range_color=[35, 65],
                 text_auto=".0f", 
                 aspect="auto",
                 height=800
