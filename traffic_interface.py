@@ -12,17 +12,8 @@ import random
 from shapely.geometry import LineString
 from pyproj import Transformer
 
-# --- 1. Ρυθμίσεις σελίδας - Modern Theme & Favicon Πανεπιστημίου ---
-# Αν υπάρχει το logo, το βάζει στο tab του browser, αλλιώς βάζει emoji
-icon_path = "upatras_logo.png" if os.path.exists("upatras_logo.png") else "🚦"
-st.set_page_config(page_title="Patras Traffic Analytics PRO", page_icon=icon_path, layout="wide")
-
-# (Προαιρετικό) Καρφίτσωμα λογότυπου πάνω αριστερά στο Streamlit UI
-if os.path.exists("upatras_logo.png"):
-    try:
-        st.logo("upatras_logo.png")
-    except:
-        pass
+# 1. Ρυθμίσεις σελίδας - Modern Theme
+st.set_page_config(page_title="Patras Traffic Analytics PRO", page_icon="🚦", layout="wide")
 
 # 🔥 CUSTOM CSS ΓΙΑ MODERN ΕΜΦΑΝΙΣΗ
 st.markdown("""
@@ -43,18 +34,7 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
-# --- Διάταξη Κεντρικού Τίτλου με Λογότυπο ---
-col_logo, col_title = st.columns([1, 8]) 
-with col_logo:
-    if os.path.exists("upatras_logo.png"):
-        st.image("upatras_logo.png", width=90)
-    else:
-        st.markdown("<h1 style='text-align: center;'>🏛️</h1>", unsafe_allow_html=True)
-
-with col_title:
-    st.title("Patras Traffic Analytics PRO")
-    st.markdown("<p style='color: #00BFFF; font-size: 16px; margin-top: -15px;'><i>Ανάπτυξη & Ανάλυση: Πανεπιστήμιο Πατρών</i></p>", unsafe_allow_html=True)
-
+st.title("🚦 Patras Traffic Analytics PRO")
 st.markdown("---")
 
 if 'start_point' not in st.session_state: st.session_state.start_point = None
@@ -103,18 +83,10 @@ API_KEYS = [
     "V8V7MYwbnjA6y0YJj8V46mkxvXRM9Uz9"
 ]
 
-# --- 4. SIDEBAR με Εικόνα ---
+# --- 4. SIDEBAR ---
 with st.sidebar:
-    # Εμφάνιση της εικόνας στο Sidebar
-    if os.path.exists("upatras_logo.png"):
-        st.image("upatras_logo.png", use_container_width=True)
-        st.markdown("<p style='text-align: center; color: #BDBDBD; font-size: 14px;'>Εργαστήριο Συστημάτων Μεταφορών</p>", unsafe_allow_html=True)
-    else:
-        st.markdown("<h3 style='text-align: center;'>🏛️ Πανεπιστήμιο Πατρών</h3>", unsafe_allow_html=True)
-    
-    st.markdown("---")
     st.markdown("## ⚙️ Κέντρο Ελέγχου")
-    
+    st.markdown("---")
     available_dates = sorted(df_history['Date'].dropna().unique())
     if not available_dates:
         st.error("Σφάλμα: Το CSV δεν έχει έγκυρες ημερομηνίες!")
@@ -145,6 +117,7 @@ with st.sidebar:
     
     live_speeds = dict(zip(all_current_df['Road_Segment'], all_current_df['Speed_kmh']))
     
+    # 🔥 1. ΑΦΑΙΡΕΣΗ ΟΛΩΝ ΤΩΝ ΜΗΔΕΝΙΚΩΝ (Γκρι δρόμων)
     roads_to_remove = []
     for road, speed in live_speeds.items():
         try:
@@ -152,6 +125,7 @@ with st.sidebar:
         except:
             val = 0.0
             
+        # Αν ΟΠΟΙΟΣΔΗΠΟΤΕ δρόμος έχει 0 (ή κάτω από 0.5), διαγράφεται για να πάρει δυναμική ταχύτητα
         if val <= 0.5: 
             roads_to_remove.append(road)
 
@@ -170,9 +144,10 @@ with st.sidebar:
 
     dynamic_secondary_speeds = {}
     
+    # 🔥 ΑΛΛΑΓΗ-ΚΛΕΙΔΙ: Ψάχνει κατευθείαν στον χάρτη (geometry_data) και όχι στο Excel!
     for r_name in geometry_data.keys():
         if r_name not in live_speeds:
-            static_speed = static_data.get(r_name, 50) 
+            static_speed = static_data.get(r_name, 50) # Αν δεν το βρει στο Excel, βάζει 50 από default
             center_sec = get_center(geometry_data[r_name])
             
             distances = []
@@ -182,6 +157,7 @@ with st.sidebar:
             
             distances.sort()
             
+            # 🔥 ΕΞΥΠΝΗ ΛΟΓΙΚΗ ΓΙΑ ΤΑ ΑΝΤΙΘΕΤΑ ΡΕΥΜΑΤΑ (_rev)
             if "_rev" in str(r_name).lower():
                 closest_live = distances[:1]
             else:
@@ -232,7 +208,7 @@ def get_parallel_line(coords, dist_meters=2.0):
     except:
         return coords
 
-# Βοηθητική συνάρτηση για τον έλεγχο "Night Mode" (22:00 - 06:00)
+# 🔥 ΝΕΑ βοηθητική συνάρτηση για τον έλεγχο "Night Mode" (22:00 - 06:00)
 def is_night_time(time_str):
     if not time_str: return False
     try:
@@ -241,13 +217,14 @@ def is_night_time(time_str):
     except:
         return False
 
-# Βελτιωμένη συνάρτηση χρωμάτων που δέχεται και την ώρα
+# 🔥 ΝΕΑ βελτιωμένη συνάρτηση χρωμάτων που δέχεται και την ώρα
 def get_hybrid_color(speed, road_name, current_time_str):
     if pd.isna(speed) or speed == 0: return "#7f8c8d" 
     
     r_type = road_types.get(road_name, "").lower()
     night_mode = is_night_time(current_time_str)
     
+    # 1. Βασικός υπολογισμός κατηγορίας
     if "trunk" in r_type or "motorway" in r_type:
         limit = static_data.get(road_name, 90)
         ratio = speed / limit if limit > 0 else 1
@@ -259,10 +236,12 @@ def get_hybrid_color(speed, road_name, current_time_str):
         elif speed < 30: color_cat = "yellow"
         else: color_cat = "green"
         
+    # 2. Προσαρμογή λόγω ώρας (Night Mode Shift)
     if night_mode:
-        if color_cat == "red": color_cat = "yellow"
-        elif color_cat == "yellow": color_cat = "green"
+        if color_cat == "red": color_cat = "yellow"     # Το κόκκινο γίνεται κίτρινο
+        elif color_cat == "yellow": color_cat = "green" # Το κίτρινο γίνεται πράσινο
         
+    # 3. Επιστροφή του σωστού HEX
     if color_cat == "red": return "#EF5350"
     if color_cat == "yellow": return "#FFCA28"
     return "#66BB6A"
@@ -305,6 +284,7 @@ with tab1:
             tooltip=f"{road_name}: {speed} km/h"
         ).add_to(m)
 
+        # Εμφάνιση ονόματος ΠΑΝΩ στη γραμμή ΜΟΝΟ αν έχει επιλεγεί ένας συγκεκριμένος δρόμος
         if selected_road != "Όλες οι Οδοί" and road_name == selected_road:
             PolyLineTextPath(
                 line,
@@ -324,6 +304,7 @@ with tab1:
             filtered_view_df['Type'] = filtered_view_df['Road_Segment'].map(road_types).fillna('Άγνωστο')
             filtered_view_df['Limit'] = filtered_view_df['Road_Segment'].apply(lambda x: static_data.get(x, 50))
             
+            # 🔥 Ενημερωμένη συνάρτηση is_congested
             def is_congested(row):
                 r_type = str(row['Type']).lower()
                 night_mode = is_night_time(selected_time)
@@ -369,6 +350,7 @@ with tab1:
             with c_right:
                 st.markdown("#### 🚦 Κατανομή Κυκλοφορίας")
                 
+                # 🔥 Ενημερωμένη συνάρτηση categorize_hybrid
                 def categorize_hybrid(row):
                     speed = row['Speed_kmh']
                     r_type = str(row['Type']).lower()
@@ -384,6 +366,7 @@ with tab1:
                         elif speed < 30: cat = 'Μέτρια'
                         else: cat = 'Ελεύθερη'
                         
+                    # Μετατόπιση κατηγοριών το βράδυ
                     if night_mode:
                         if cat == 'Συμφόρηση': return 'Μέτρια'
                         if cat == 'Μέτρια': return 'Ελεύθερη'
@@ -401,6 +384,7 @@ with tab1:
         st.caption("Πώς συμπεριφέρονται οι διαφορετικές κατηγορίες δρόμων μέσα στη μέρα.")
         
         df_history['Type'] = df_history['Road_Segment'].map(road_types).fillna('Άγνωστο')
+
         df_types = df_history[df_history['Type'] != 'Άγνωστο'].copy()
         
         if not df_types.empty:
@@ -418,11 +402,16 @@ with tab1:
             )
             
             fig_type.update_traces(connectgaps=True)
+            
             fig_type.update_layout(
                 paper_bgcolor='rgba(0,0,0,0)',
                 plot_bgcolor='rgba(10,10,10,0.5)',
                 font=dict(color="#DFE6E9"),
-                xaxis=dict(showgrid=False, tickangle=-45, nticks=24),
+                xaxis=dict(
+                    showgrid=False, 
+                    tickangle=-45, 
+                    nticks=24
+                ),
                 yaxis=dict(showgrid=True, gridcolor='rgba(255,255,255,0.1)'),
                 hovermode="x unified"
             )
@@ -454,6 +443,7 @@ with tab1:
                                     color_discrete_map={f'Επιλεγμένη Οδός': '#00BFFF', 'Μέσος Όρος Πόλης': '#7f8c8d'})
             
             fig_road_line.update_traces(marker=dict(size=6))
+
             fig_road_line.update_layout(
                 paper_bgcolor='rgba(0,0,0,0)', plot_bgcolor='rgba(10,10,10,0.5)', font=dict(color="white"),
                 xaxis=dict(gridcolor="#333"), yaxis=dict(gridcolor="#333"),
@@ -526,7 +516,7 @@ with tab2:
                 
                 time_min = round(summary.get('travelTimeInSeconds', 0) / 60, 1)
                 distance_km = round(summary.get('lengthInMeters', 0) / 1000, 2)
-                
+                delay_sec = summary.get('trafficDelayInSeconds', 0)
                 calc_speed = round((summary.get('lengthInMeters', 0) / 1000) / (summary.get('travelTimeInSeconds', 1) / 3600), 1)
                 
                 st.markdown("---")
@@ -547,6 +537,7 @@ with tab2:
                 
                 for road_name, coords in geometry_data.items():
                     speed = live_speeds.get(road_name, static_data.get(road_name, 0))
+                    # 🔥 Προστέθηκε η ώρα και εδώ
                     c = get_hybrid_color(speed, road_name, selected_time)
                     folium.PolyLine(locations=coords, color=c, weight=2, opacity=0.2).add_to(m_res)
 
@@ -580,6 +571,7 @@ with tab3:
     
     df_heat = df_history.copy()
     
+    # 🛠️ ΕΞΥΠΝΟ ΦΙΛΤΡΟ: Αγνοεί τα μηδενικά από 403 API errors
     df_heat.loc[df_heat['Speed_kmh'] < 2, 'Speed_kmh'] = 25.0
     
     if selected_type != "Όλοι οι Τύποι":
@@ -613,9 +605,12 @@ with tab3:
         pivot_df = pivot_df.reindex(all_half_hours)
         
         pivot_df = pivot_df.dropna(how='all')
+        
+        # 🛠️ ΕΞΥΠΝΟ ΓΕΜΙΣΜΑ (SMART FILL): Ενώνει τα μικρά κενά (ΜΟΝΟ ενδιάμεσα, όχι στο μέλλον)
         pivot_df = pivot_df.interpolate(method='linear', limit=4, limit_area='inside')
         
         if not pivot_df.empty:
+            
             st.markdown("#### 🏆 Στατιστικά Αιχμής")
             c1, c2, c3 = st.columns(3)
             
@@ -631,14 +626,15 @@ with tab3:
             
             st.markdown("<br>", unsafe_allow_html=True)
 
+            # --- DRAMATIC CONTRAST HEATMAP ---
             dramatic_scale = [
-                [0.0,  "#2ecc71"],
-                [0.3,  "#2ecc71"],
-                [0.35, "#f1c40f"],
-                [0.45, "#e67e22"],
-                [0.55, "#e74c3c"],
-                [0.8,  "#c0392b"],
-                [1.0,  "#8e44ad"]
+                [0.0,  "#2ecc71"], # 🟢 Πράσινο (Άδειο)
+                [0.3,  "#2ecc71"], # 🟢 Πράσινο 
+                [0.35, "#f1c40f"], # 🟡 Κίτρινο (Αρχίζει κίνηση)
+                [0.45, "#e67e22"], # 🟠 Πορτοκαλί (Πολύ κίνηση)
+                [0.55, "#e74c3c"], # 🔴 Κόκκινο (Στοπ)
+                [0.8,  "#c0392b"], # 🩸 Βαθύ Κόκκινο (Μποτιλιάρισμα)
+                [1.0,  "#8e44ad"]  # 🟣 Μωβ (Αποκάλυψη)
             ]
 
             fig_heat = px.imshow(
@@ -653,14 +649,28 @@ with tab3:
                 height=800
             )
             
-            fig_heat.update_traces(xgap=5, ygap=5, texttemplate="%{z:.0f}%")
+            fig_heat.update_traces(
+                xgap=5, 
+                ygap=5, 
+                texttemplate="%{z:.0f}%" 
+            )
+            
             fig_heat.update_layout(
                 paper_bgcolor='rgba(0,0,0,0)', 
                 plot_bgcolor='rgba(10,10,10,0.5)', 
                 font=dict(color="white"),
                 xaxis=dict(side="top", tickfont=dict(size=12)), 
-                yaxis=dict(autorange="reversed", tickmode="linear", tickfont=dict(size=11)),
-                coloraxis_colorbar=dict(title="Συμφόρηση", ticksuffix="%", dtick=5, tickmode="linear")
+                yaxis=dict(
+                    autorange="reversed", 
+                    tickmode="linear",
+                    tickfont=dict(size=11)
+                ),
+                coloraxis_colorbar=dict(
+                    title="Συμφόρηση", 
+                    ticksuffix="%",
+                    dtick=5,
+                    tickmode="linear"
+                )
             )
             
             st.plotly_chart(fig_heat, use_container_width=True)
