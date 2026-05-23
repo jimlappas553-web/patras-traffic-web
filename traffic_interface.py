@@ -374,4 +374,6 @@ with tab1:
         df_road_day = df_day[df_day['Road_Segment'] == selected_road].sort_values('Time')
         if not df_road_day.empty:
             c1, c2, c3 = st.columns(3)
-            c1.metric("⏱️ Ταχύτητα τώρα", f"{live_speeds.get(selected_road, 'N/A')}
+            c1.metric("⏱️ Ταχύτητα τώρα", f"{live_speeds.get(selected_road, 'N/A')} km/h")
+            c2.metric("📈 Μέγιστη Σήμερα", f"{df_road_day['Speed_kmh'].max()} km/h")
+            c3.metric("📉 Ελάχιστη Σήμερα", f"{df_road_day['Speed_kmh'].min()} km/h")
