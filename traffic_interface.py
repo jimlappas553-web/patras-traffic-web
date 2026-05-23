@@ -40,6 +40,45 @@ st.markdown("---")
 if 'start_point' not in st.session_state: st.session_state.start_point = None
 if 'end_point' not in st.session_state: st.session_state.end_point = None
 
+# --- ΚΟΙΝΕΣ ΣΥΝΑΡΤΗΣΕΙΣ ---
+to_mercator = Transformer.from_crs("EPSG:4326", "EPSG:3857", always_xy=True)
+to_wgs84 = Transformer.from_crs("EPSG:3857", "EPSG:4326", always_xy=True)
+
+def get_center(coords):
+    lats = [c[0] for c in coords]
+    lons = [c[1] for c in coords]
+    return (sum(lats)/len(lats), sum(lons)/len(lons))
+
+def get_parallel_line(coords, dist_meters=2.0): 
+    try:
+        xy_pairs = [(c[1], c[0]) for c in coords]
+        if len(xy_pairs) < 2: return coords
+        projected_xy = [to_mercator.transform(x, y) for x, y in xy_pairs]
+        line = LineString(projected_xy)
+        offset_line = line.parallel_offset(dist_meters, side='right', join_style=1) 
+        
+        coords_out_xy = []
+        if offset_line.geom_type == 'MultiLineString':
+            for sub_line in offset_line.geoms: coords_out_xy.extend(list(sub_line.coords))
+        else:
+            coords_out_xy = list(offset_line.coords)
+        if len(coords_out_xy) < 2: return coords
+        unprojected_xy = [to_wgs84.transform(x, y) for x, y in coords_out_xy]
+        return [[y, x] for x, y in unprojected_xy]
+    except:
+        return coords
+
+# Φορτώνουμε το CSV με cache για να μην κολλάει η εφαρμογή
+@st.cache_data
+def load_csv_data():
+    if not os.path.exists("live_traffic_data.csv"):
+        return None
+    df = pd.read_csv("live_traffic_data.csv", sep=";")
+    df['Timestamp'] = pd.to_datetime(df['Timestamp'], format='mixed', errors='coerce')
+    df['Date'] = df['Timestamp'].dt.date
+    df['Time'] = df['Timestamp'].dt.strftime('%H:%M')
+    return df
+
 # --- 2. Φόρτωση Στατικών & Τύπων από το EXCEL ---
 static_data = {}
 road_types = {}
@@ -59,6 +98,20 @@ if os.path.exists("traffic_patra.xlsx"):
     except Exception as e:
         st.error(f"Σφάλμα ανάγνωσης Excel: {e}")
 
+def get_hybrid_color(speed, road_name):
+    if pd.isna(speed) or speed == 0: return "#7f8c8d" 
+    r_type = road_types.get(road_name, "").lower()
+    if "trunk" in r_type or "motorway" in r_type:
+        limit = static_data.get(road_name, 90)
+        ratio = speed / limit if limit > 0 else 1
+        if ratio < 0.4: return "#EF5350"
+        if ratio < 0.75: return "#FFCA28"
+        return "#66BB6A"
+    else:
+        if speed < 15: return "#EF5350"
+        if speed < 30: return "#FFCA28"
+        return "#66BB6A"
+
 # --- 3. Φόρτωση Γεωμετρίας & CSV ---
 if not os.path.exists("road_geometry.json"):
     st.error("❌ Λείπει το αρχείο 'road_geometry.json'! Τρέξτε πρώτα το setupgeometry.py")
@@ -67,14 +120,10 @@ if not os.path.exists("road_geometry.json"):
 with open("road_geometry.json", "r", encoding="utf-8") as f:
     geometry_data = json.load(f)
 
-if not os.path.exists("live_traffic_data.csv"):
+df_history = load_csv_data()
+if df_history is None:
     st.warning("⏳ Αναμονή για δεδομένα από το Bot...")
     st.stop()
-
-df_history = pd.read_csv("live_traffic_data.csv", sep=";")
-df_history['Timestamp'] = pd.to_datetime(df_history['Timestamp'], format='mixed', errors='coerce')
-df_history['Date'] = df_history['Timestamp'].dt.date
-df_history['Time'] = df_history['Timestamp'].dt.strftime('%H:%M')
 
 API_KEYS = [
     "UsA5r09FOSV6PmRd4NZFF3JCW3y6N2o1", 
@@ -125,18 +174,12 @@ with st.sidebar:
         except:
             val = 0.0
             
-        # Αν ΟΠΟΙΟΣΔΗΠΟΤΕ δρόμος έχει 0 (ή κάτω από 0.5), διαγράφεται για να πάρει δυναμική ταχύτητα
         if val <= 0.5: 
             roads_to_remove.append(road)
 
     for road in roads_to_remove:
         del live_speeds[road]
         
-    def get_center(coords):
-        lats = [c[0] for c in coords]
-        lons = [c[1] for c in coords]
-        return (sum(lats)/len(lats), sum(lons)/len(lons))
-
     live_centers = {}
     for r_name in live_speeds.keys():
         if r_name in geometry_data:
@@ -144,10 +187,10 @@ with st.sidebar:
 
     dynamic_secondary_speeds = {}
     
-    # 🔥 ΑΛΛΑΓΗ-ΚΛΕΙΔΙ: Ψάχνει κατευθείαν στον χάρτη (geometry_data) και όχι στο Excel!
+    # 🔥 ΑΛΛΑΓΗ-ΚΛΕΙΔΙ: Ψάχνει κατευθείαν στον χάρτη (geometry_data)
     for r_name in geometry_data.keys():
         if r_name not in live_speeds:
-            static_speed = static_data.get(r_name, 50) # Αν δεν το βρει στο Excel, βάζει 50 από default
+            static_speed = static_data.get(r_name, 50) 
             center_sec = get_center(geometry_data[r_name])
             
             distances = []
@@ -157,7 +200,6 @@ with st.sidebar:
             
             distances.sort()
             
-            # 🔥 ΕΞΥΠΝΗ ΛΟΓΙΚΗ ΓΙΑ ΤΑ ΑΝΤΙΘΕΤΑ ΡΕΥΜΑΤΑ (_rev)
             if "_rev" in str(r_name).lower():
                 closest_live = distances[:1]
             else:
@@ -185,45 +227,8 @@ with st.sidebar:
         
     st.metric(label="📊 Ενεργές Live Μετρήσεις", value=len(filtered_view_df))
 
-# --- ΚΟΙΝΕΣ ΣΥΝΑΡΤΗΣΕΙΣ ---
-to_mercator = Transformer.from_crs("EPSG:4326", "EPSG:3857", always_xy=True)
-to_wgs84 = Transformer.from_crs("EPSG:3857", "EPSG:4326", always_xy=True)
-
-def get_parallel_line(coords, dist_meters=2.0): 
-    try:
-        xy_pairs = [(c[1], c[0]) for c in coords]
-        if len(xy_pairs) < 2: return coords
-        projected_xy = [to_mercator.transform(x, y) for x, y in xy_pairs]
-        line = LineString(projected_xy)
-        offset_line = line.parallel_offset(dist_meters, side='right', join_style=1) 
-        
-        coords_out_xy = []
-        if offset_line.geom_type == 'MultiLineString':
-            for sub_line in offset_line.geoms: coords_out_xy.extend(list(sub_line.coords))
-        else:
-            coords_out_xy = list(offset_line.coords)
-        if len(coords_out_xy) < 2: return coords
-        unprojected_xy = [to_wgs84.transform(x, y) for x, y in coords_out_xy]
-        return [[y, x] for x, y in unprojected_xy]
-    except:
-        return coords
-
-def get_hybrid_color(speed, road_name):
-    if pd.isna(speed) or speed == 0: return "#7f8c8d" 
-    r_type = road_types.get(road_name, "").lower()
-    if "trunk" in r_type or "motorway" in r_type:
-        limit = static_data.get(road_name, 90)
-        ratio = speed / limit if limit > 0 else 1
-        if ratio < 0.4: return "#EF5350"
-        if ratio < 0.75: return "#FFCA28"
-        return "#66BB6A"
-    else:
-        if speed < 15: return "#EF5350"
-        if speed < 30: return "#FFCA28"
-        return "#66BB6A"
-
 # --- TABS ---
-tab1, tab2, tab3 = st.tabs(["🗺️ Ανάλυση Δικτύου & Χάρτης", "🔬 Υπολογισμός Κλικάροντας", "📅 Εβδομαδιαίο Heatmap"])
+tab1, tab2, tab3 = st.tabs(["🗺️ Ανάλυση Δικτύου & Χάρτης", "🔬 Υπολογισμός Διαδρομής", "📅 Εβδομαδιαίο Heatmap"])
 
 # ================= TAB 1 =================
 with tab1:
@@ -260,7 +265,6 @@ with tab1:
             tooltip=f"{road_name}: {speed} km/h"
         ).add_to(m)
 
-        # Εμφάνιση ονόματος ΠΑΝΩ στη γραμμή ΜΟΝΟ αν έχει επιλεγεί ένας συγκεκριμένος δρόμος
         if selected_road != "Όλες οι Οδοί" and road_name == selected_road:
             PolyLineTextPath(
                 line,
@@ -341,19 +345,14 @@ with tab1:
         st.markdown("### 📈 Συγκριτική Ανάλυση ανά Τύπο Οδού")
         st.caption("Πώς συμπεριφέρονται οι διαφορετικές κατηγορίες δρόμων μέσα στη μέρα.")
         
-       # 🔥 ΔΙΟΡΘΩΣΗ: Φτιάχνουμε τη στήλη 'Type' με βάση το λεξικό road_types ΠΡΙΝ φιλτράρουμε!
         df_history['Type'] = df_history['Road_Segment'].map(road_types).fillna('Άγνωστο')
-
-        # 1. ΚΑΘΑΡΙΣΜΟΣ: Πετάμε το 'Άγνωστο' που προσθέτει θόρυβο
         df_types = df_history[df_history['Type'] != 'Άγνωστο'].copy()
         
         if not df_types.empty:
-            # 2. ΤΑΞΙΝΟΜΗΣΗ: Φτιάχνουμε την ώρα και τη βάζουμε στη σειρά (για να μη πάει το 12:40 στο τέλος)
             df_types['Ώρα'] = df_types['Timestamp'].dt.strftime('%H:%M')
             type_grouped = df_types.groupby(['Ώρα', 'Type'])['Speed_kmh'].mean().reset_index()
             type_grouped = type_grouped.sort_values(by='Ώρα')
             
-            # 3. ΣΤΗΣΙΜΟ ΓΡΑΦΗΜΑΤΟΣ
             fig_type = px.line(
                 type_grouped, 
                 x="Ώρα", 
@@ -363,7 +362,6 @@ with tab1:
                 markers=True
             )
             
-            # 🔥 Η ΜΑΓΙΚΗ ΕΝΤΟΛΗ: Ενώνει τα κενά! (γεφυρώνει την τρύπα του μεσημεριού)
             fig_type.update_traces(connectgaps=True)
             
             fig_type.update_layout(
@@ -373,7 +371,7 @@ with tab1:
                 xaxis=dict(
                     showgrid=False, 
                     tickangle=-45, 
-                    nticks=24 # Αραιώνει τις ταμπέλες της ώρας για να μη γίνεται "μουτζούρα"
+                    nticks=24 
                 ),
                 yaxis=dict(showgrid=True, gridcolor='rgba(255,255,255,0.1)'),
                 hovermode="x unified"
@@ -418,16 +416,32 @@ with tab1:
 
 # ================= TAB 2 =================
 with tab2:
-    st.markdown("### 🔬 Επιλογή Διαδρομής & Live Κίνηση")
-    st.caption("💡 Οδηγός: Κλικάρετε πάνω στις διακριτικές μπλε γραμμές για να επιλέξετε Αφετηρία και Προορισμό.")
+    st.markdown("### 🔬 Εύρεση Βέλτιστης Διαδρομής (Από το Α στο Β)")
+    st.caption("💡 Οδηγός: Επιλέξτε αφετηρία και προορισμό από τα μενού, ή κλικάρετε πάνω στις διακριτικές μπλε γραμμές του χάρτη.")
     
-    c_btn, c_inf = st.columns([1, 4])
-    with c_btn:
-        if st.button("🔄 Καθαρισμός Σημείων"):
-            st.session_state.start_point = None
-            st.session_state.end_point = None
-            st.rerun()
-        
+    # Λίστα με όλους τους διαθέσιμους δρόμους για τα dropdowns
+    available_route_roads = sorted(list(geometry_data.keys()))
+    
+    # Μενού Επιλογής
+    c_sel1, c_sel2 = st.columns(2)
+    with c_sel1:
+        dropdown_start = st.selectbox("🟢 Επιλογή Αφετηρίας (Σημείο Α):", ["Χειροκίνητα στο χάρτη..."] + available_route_roads)
+    with c_sel2:
+        dropdown_end = st.selectbox("🔴 Επιλογή Προορισμού (Σημείο Β):", ["Χειροκίνητα στο χάρτη..."] + available_route_roads)
+
+    # Κουμπί Καθαρισμού
+    if st.button("🔄 Καθαρισμός Σημείων", use_container_width=True):
+        st.session_state.start_point = None
+        st.session_state.end_point = None
+        st.rerun()
+
+    # Ενημέρωση των σημείων από τα dropdowns
+    if dropdown_start != "Χειροκίνητα στο χάρτη...":
+        st.session_state.start_point = get_center(geometry_data[dropdown_start])
+    if dropdown_end != "Χειροκίνητα στο χάρτη...":
+        st.session_state.end_point = get_center(geometry_data[dropdown_end])
+
+    # Χάρτης επιλογής 
     m_click = folium.Map(
         location=[38.2462, 21.7351], 
         zoom_start=14, 
@@ -443,8 +457,9 @@ with tab2:
     if st.session_state.end_point:
         folium.Marker(st.session_state.end_point, popup="Προορισμός", icon=folium.Icon(color="red", icon="stop")).add_to(m_click)
         
-    map_data = st_folium(m_click, width=1300, height=500, key="click_selector_map")
+    map_data = st_folium(m_click, width=1300, height=400, key="click_selector_map")
     
+    # Λογική κλικ στον χάρτη
     if map_data and map_data.get("last_clicked"):
         clicked_coords = [map_data["last_clicked"]["lat"], map_data["last_clicked"]["lng"]]
         if st.session_state.start_point is None:
@@ -454,6 +469,7 @@ with tab2:
             st.session_state.end_point = clicked_coords
             st.rerun()
             
+    # Προβολή επιλεγμένων συντεταγμένων
     c_out1, c_out2 = st.columns(2)
     with c_out1:
         st.markdown(f"<div style='background-color: #1E1E1E; padding: 15px; border-radius: 10px; border-left: 5px solid #66BB6A;'>🟢 <b>Αφετηρία:</b> {st.session_state.start_point if st.session_state.start_point else 'Εκκρεμεί...'}</div>", unsafe_allow_html=True)
@@ -462,16 +478,25 @@ with tab2:
     
     st.markdown("<br>", unsafe_allow_html=True)
 
+    # Υπολογισμός Βέλτιστης Διαδρομής
     if st.session_state.start_point and st.session_state.end_point:
         s_str = f"{st.session_state.start_point[0]},{st.session_state.start_point[1]}"
         e_str = f"{st.session_state.end_point[0]},{st.session_state.end_point[1]}"
         
         url = f"https://api.tomtom.com/routing/1/calculateRoute/{s_str}:{e_str}/json"
-        params = {'key': random.choice(API_KEYS), 'traffic': 'true', 'routeType': 'fastest', 'travelMode': 'car', 'sectionType': 'traffic'}
+        params = {
+            'key': random.choice(API_KEYS), 
+            'traffic': 'true', 
+            'routeType': 'fastest', 
+            'travelMode': 'car', 
+            'sectionType': 'traffic'
+        }
+        
         try:
-            with st.spinner('🔭 Υπολογισμός διαδρομής με βάση την κίνηση...'):
+            with st.spinner('🔭 Υπολογισμός βέλτιστης διαδρομής με βάση τη live κίνηση...'):
                 response = requests.get(url, params=params, timeout=10)
                 res_data = response.json()
+                
             if response.status_code == 200 and 'routes' in res_data:
                 summary = res_data['routes'][0]['summary']
                 points = res_data['routes'][0]['legs'][0]['points']
@@ -483,12 +508,13 @@ with tab2:
                 calc_speed = round((summary.get('lengthInMeters', 0) / 1000) / (summary.get('travelTimeInSeconds', 1) / 3600), 1)
                 
                 st.markdown("---")
-                st.markdown("#### 🔭 Αποτελέσματα Βέλτιστης Διαδρομής")
+                st.markdown("#### 🏆 Αποτελέσματα Βέλτιστης Διαδρομής")
                 
                 res_col1, res_col2, res_col3 = st.columns(3)
-                res_col1.metric("⏱️ Χρόνος", f"{time_min} λεπτά")
-                res_col2.metric("🏎️ Ταχύτητα", f"{calc_speed} km/h")
-                res_col3.metric("📏 Απόσταση", f"{distance_km} km")
+                res_col1.metric("⏱️ Χρόνος Άφιξης", f"{time_min} λεπτά", f"Καθυστέρηση κίνησης: {delay_sec} δευτ.", delta_color="inverse")
+                res_col2.metric("🏎️ Μέση Ταχύτητα", f"{calc_speed} km/h")
+                res_col3.metric("📏 Συνολική Απόσταση", f"{distance_km} km")
+                
                 route_coords = [[p['latitude'], p['longitude']] for p in points]
                 
                 m_res = folium.Map(
@@ -520,6 +546,7 @@ with tab2:
 
                 folium.Marker(location=route_coords[0], icon=folium.Icon(color="green", icon="play")).add_to(m_res)
                 folium.Marker(location=route_coords[-1], icon=folium.Icon(color="red", icon="stop")).add_to(m_res)
+                
                 st_folium(m_res, width=1300, height=450, key="result_route_map")
             else:
                 st.error("Σφάλμα API: Δεν βρέθηκε διαδρομή. Δοκιμάστε να κάνετε κλικ πιο κοντά στις γραμμές.")
@@ -588,16 +615,14 @@ with tab3:
             
             st.markdown("<br>", unsafe_allow_html=True)
 
-            # --- DRAMATIC CONTRAST HEATMAP ---
-            # "Επιθετική" χρωματική κλίμακα για έντονες διαφορές
             dramatic_scale = [
-                [0.0,  "#2ecc71"], # 🟢 Πράσινο (Άδειο)
-                [0.3,  "#2ecc71"], # 🟢 Πράσινο 
-                [0.35, "#f1c40f"], # 🟡 Κίτρινο (Αρχίζει κίνηση)
-                [0.45, "#e67e22"], # 🟠 Πορτοκαλί (Πολύ κίνηση)
-                [0.55, "#e74c3c"], # 🔴 Κόκκινο (Στοπ)
-                [0.8,  "#c0392b"], # 🩸 Βαθύ Κόκκινο (Μποτιλιάρισμα)
-                [1.0,  "#8e44ad"]  # 🟣 Μωβ (Αποκάλυψη)
+                [0.0,  "#2ecc71"],
+                [0.3,  "#2ecc71"],
+                [0.35, "#f1c40f"],
+                [0.45, "#e67e22"],
+                [0.55, "#e74c3c"],
+                [0.8,  "#c0392b"],
+                [1.0,  "#8e44ad"] 
             ]
 
             fig_heat = px.imshow(
@@ -606,7 +631,7 @@ with tab3:
                 x=pivot_df.columns,
                 y=pivot_df.index,
                 color_continuous_scale=dramatic_scale, 
-                range_color=[35, 65], # 🔥 Το ζουμ για να φαίνονται οι διαφορές!
+                range_color=[35, 65], 
                 text_auto=".0f", 
                 aspect="auto",
                 height=800
